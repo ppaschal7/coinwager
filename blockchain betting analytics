@@ -1,0 +1,128 @@
+import json
+from web3 import Web3
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+class BlockchainBettingAnalytics:
+    def __init__(self, ethereum_rpc_url='https://mainnet.infura.io/v3/YOUR-PROJECT-ID'):
+        """
+        Initialize the blockchain analytics tool
+        
+        :param ethereum_rpc_url: Ethereum network RPC endpoint
+        """
+        self.web3 = Web3(Web3.HTTPProvider(ethereum_rpc_url))
+        
+        # Validate Web3 connection
+        if not self.web3.is_connected():
+            raise ConnectionError("Failed to connect to Ethereum network")
+        
+        # Betting contract ABI and address (example placeholders)
+        self.betting_contract_address = Web3.to_checksum_address('0x1234567890123456789012345678901234567890')
+        self.betting_contract_abi = json.loads('[{"inputs":[],"name":"placeBet","outputs":[]}]')
+        
+        self.contract = self.web3.eth.contract(
+            address=self.betting_contract_address, 
+            abi=self.betting_contract_abi
+        )
+
+    def fetch_betting_events(self, from_block=0, to_block='latest'):
+        """
+        Retrieve betting events from the blockchain
+        
+        :param from_block: Starting block number
+        :param to_block: Ending block number
+        :return: List of betting events
+        """
+        betting_events = []
+        
+        try:
+            events = self.contract.events.BetPlaced.get_logs(
+                fromBlock=from_block, 
+                toBlock=to_block
+            )
+            
+            for event in events:
+                betting_events.append({
+                    'timestamp': self.web3.eth.get_block(event['blockNumber']).timestamp,
+                    'user': event['args']['user'],
+                    'amount': self.web3.from_wei(event['args']['amount'], 'ether'),
+                    'event': event
+                })
+            
+            return betting_events
+        
+        except Exception as e:
+            print(f"Error fetching betting events: {e}")
+            return []
+
+    def analyze_betting_trends(self, events):
+        """
+        Analyze betting trends from collected events
+        
+        :param events: List of betting events
+        :return: Pandas DataFrame with analyzed data
+        """
+        df = pd.DataFrame(events)
+        
+        # Convert timestamp to datetime
+        df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+        
+        # Group by day and calculate metrics
+        daily_trends = df.groupby(pd.Grouper(key='datetime', freq='D')).agg({
+            'amount': ['count', 'sum', 'mean'],
+            'user': 'nunique'
+        })
+        
+        daily_trends.columns = ['bet_count', 'total_volume', 'avg_bet_size', 'unique_users']
+        return daily_trends
+
+    def visualize_trends(self, daily_trends):
+        """
+        Create visualizations of betting trends
+        
+        :param daily_trends: DataFrame with daily betting trends
+        """
+        plt.figure(figsize=(12, 8))
+        
+        plt.subplot(2, 2, 1)
+        daily_trends['bet_count'].plot(title='Daily Bet Count')
+        
+        plt.subplot(2, 2, 2)
+        daily_trends['total_volume'].plot(title='Daily Betting Volume (ETH)')
+        
+        plt.subplot(2, 2, 3)
+        daily_trends['avg_bet_size'].plot(title='Average Bet Size')
+        
+        plt.subplot(2, 2, 4)
+        daily_trends['unique_users'].plot(title='Unique Users')
+        
+        plt.tight_layout()
+        plt.show()
+
+    def generate_report(self, from_block=0, to_block='latest'):
+        """
+        Generate comprehensive betting analytics report
+        
+        :param from_block: Starting block number
+        :param to_block: Ending block number
+        :return: Dictionary with analytics insights
+        """
+        events = self.fetch_betting_events(from_block, to_block)
+        daily_trends = self.analyze_betting_trends(events)
+        self.visualize_trends(daily_trends)
+        
+        return {
+            'total_events': len(events),
+            'total_volume': daily_trends['total_volume'].sum(),
+            'average_daily_bets': daily_trends['bet_count'].mean(),
+            'peak_betting_day': daily_trends['total_volume'].idxmax(),
+            'unique_users_total': len(set(event['user'] for event in events))
+        }
+
+# Example usage
+if __name__ == '__main__':
+    analytics = BlockchainBettingAnalytics()
+    report = analytics.generate_report()
+    print(json.dumps(report, indent=2))
+
