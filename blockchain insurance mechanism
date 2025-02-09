@@ -1,0 +1,172 @@
+import json
+from web3 import Web3
+from eth_account import Account
+import secrets
+import solcx
+import os
+
+class BlockchainInsurancePlatform:
+    def __init__(self, provider_url='https://sepolia.infura.io/v3/YOUR_INFURA_PROJECT_ID'):
+        """
+        Initialize the blockchain insurance platform with Ethereum network connection
+        """
+        # Connect to Ethereum network
+        self.w3 = Web3(Web3.HTTPProvider(provider_url))
+        
+        # Verify connection
+        if not self.w3.is_connected():
+            raise ConnectionError("Failed to connect to Ethereum network")
+        
+        # Compile insurance smart contract
+        self.compile_contract()
+        
+        # Setup accounts for platform operations
+        self.setup_platform_accounts()
+    
+    def compile_contract(self):
+        """
+        Compile the insurance smart contract using Solidity
+        """
+        # Ensure Solidity compiler is installed
+        solcx.install_solc('0.8.19')
+        
+        insurance_contract = '''
+        // SPDX-License-Identifier: MIT
+        pragma solidity ^0.8.19;
+
+        contract InsuranceMechanism {
+            struct Policy {
+                address policyholder;
+                uint256 premiumAmount;
+                uint256 coverageAmount;
+                uint256 startTime;
+                uint256 expiryTime;
+                bool isActive;
+                bool isClaimed;
+            }
+
+            mapping(address => Policy) public policies;
+            mapping(address => uint256) public premiumReserve;
+            
+            event PolicyCreated(address indexed policyholder, uint256 coverageAmount, uint256 premiumAmount);
+            event PolicyClaimed(address indexed policyholder, uint256 claimAmount);
+            event PremiumPaid(address indexed policyholder, uint256 amount);
+
+            function createPolicy(uint256 coverageAmount, uint256 durationDays) public payable {
+                require(msg.value > 0, "Premium must be paid");
+                require(policies[msg.sender].policyholder == address(0), "Policy already exists");
+                
+                uint256 premiumAmount = calculatePremium(coverageAmount, durationDays);
+                require(msg.value >= premiumAmount, "Insufficient premium");
+
+                policies[msg.sender] = Policy({
+                    policyholder: msg.sender,
+                    premiumAmount: premiumAmount,
+                    coverageAmount: coverageAmount,
+                    startTime: block.timestamp,
+                    expiryTime: block.timestamp + (durationDays * 1 days),
+                    isActive: true,
+                    isClaimed: false
+                });
+
+                premiumReserve[msg.sender] += msg.value;
+                emit PolicyCreated(msg.sender, coverageAmount, premiumAmount);
+            }
+
+            function calculatePremium(uint256 coverageAmount, uint256 durationDays) public pure returns (uint256) {
+                // Simple premium calculation (can be made more complex)
+                return (coverageAmount * durationDays) / 365;
+            }
+
+            function fileClaim() public {
+                Policy storage policy = policies[msg.sender];
+                require(policy.isActive, "No active policy");
+                require(!policy.isClaimed, "Claim already processed");
+                require(block.timestamp <= policy.expiryTime, "Policy expired");
+
+                policy.isClaimed = true;
+                payable(msg.sender).transfer(policy.coverageAmount);
+                emit PolicyClaimed(msg.sender, policy.coverageAmount);
+            }
+        }
+        '''
+        
+        with open('InsuranceMechanism.sol', 'w') as f:
+            f.write(insurance_contract)
+        
+        # Compile contract
+        compiled_sol = solcx.compile_files(['InsuranceMechanism.sol'])
+        self.contract_interface = compiled_sol['InsuranceMechanism.sol:InsuranceMechanism']
+    
+    def setup_platform_accounts(self):
+        """
+        Generate platform admin and operational accounts
+        """
+        # Generate secure private keys
+        self.admin_private_key = '0x' + secrets.token_hex(32)
+        self.admin_account = Account.from_key(self.admin_private_key)
+        
+        # Set default gas price and limit
+        self.w3.eth.default_account = self.admin_account.address
+    
+    def deploy_contract(self):
+        """
+        Deploy the insurance smart contract to blockchain
+        """
+        InsuranceContract = self.w3.eth.contract(
+            abi=self.contract_interface['abi'],
+            bytecode=self.contract_interface['bin']
+        )
+        
+        # Estimate gas
+        gas_estimate = InsuranceContract.constructor().estimate_gas()
+        
+        # Deploy transaction
+        transaction = InsuranceContract.constructor().build_transaction({
+            'from': self.admin_account.address,
+            'nonce': self.w3.eth.get_transaction_count(self.admin_account.address),
+            'gas': gas_estimate,
+            'gasPrice': self.w3.eth.gas_price
+        })
+        
+        # Sign transaction
+        signed_txn = self.w3.eth.account.sign_transaction(transaction, private_key=self.admin_private_key)
+        
+        # Send transaction
+        tx_hash = self.w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+        
+        # Wait for transaction receipt
+        tx_receipt = self.w3.eth.wait_for_transaction_receipt(tx_hash)
+        
+        self.contract_address = tx_receipt['contractAddress']
+        print(f"Contract deployed at: {self.contract_address}")
+    
+    def get_policy_details(self, address):
+        """
+        Retrieve policy details for a given address
+        """
+        contract = self.w3.eth.contract(
+            address=self.contract_address, 
+            abi=self.contract_interface['abi']
+        )
+        
+        policy = contract.functions.policies(address).call()
+        return {
+            'policyholder': policy[0],
+            'premiumAmount': policy[1],
+            'coverageAmount': policy[2],
+            'startTime': policy[3],
+            'expiryTime': policy[4],
+            'isActive': policy[5],
+            'isClaimed': policy[6]
+        }
+
+def main():
+    # Initialize the insurance platform
+    insurance_platform = BlockchainInsurancePlatform()
+    
+    # Deploy the contract
+    insurance_platform.deploy_contract()
+
+if __name__ == "__main__":
+    main()
